@@ -1,8 +1,14 @@
 import { AuthValidateController } from './auth-validate.controller';
 import { ApiKey, ApiKeyRole } from './entities/api-key.entity';
+import type { AuthService } from './auth.service';
+import type { AuditService } from '../audit/audit.service';
+import type { ConfigService } from '@nestjs/config';
 
 describe('AuthValidateController', () => {
-  const controller = new AuthValidateController();
+  const authService = {} as AuthService;
+  const auditService = { logInfo: jest.fn(), logWarn: jest.fn() } as unknown as AuditService;
+  const configService = { get: jest.fn().mockReturnValue([]) } as unknown as ConfigService;
+  const controller = new AuthValidateController(authService, auditService, configService);
 
   const makeKey = (over: Partial<ApiKey> = {}): ApiKey =>
     ({ id: 'k1', role: ApiKeyRole.OPERATOR, isActive: true, allowedIps: null, ...over }) as ApiKey;

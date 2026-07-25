@@ -212,7 +212,7 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
       // path is the catch below — a separate `if (!validKey)` branch here was dead code. The clientIp
       // is passed so an IP-restricted key (allowedIps set) is ENFORCED rather than blanket-rejected
       // for "Client IP could not be determined".
-      const validKey = await this.authService.validateApiKey(apiKey, clientIp);
+      const validKey = await this.authService.authenticateCredential(apiKey, clientIp);
 
       // Store the validated key AND the raw key — the raw key lets handleSubscribe
       // RE-validate on each subscription so a key revoked mid-connection is caught.
@@ -278,7 +278,7 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
     const clientIp = this.resolveClientIp(client);
     let subscriberKey: { allowedSessions?: string[] | null } | null;
     try {
-      subscriberKey = rawApiKey ? await this.authService.validateApiKey(rawApiKey, clientIp) : null;
+      subscriberKey = rawApiKey ? await this.authService.authenticateCredential(rawApiKey, clientIp) : null;
     } catch {
       subscriberKey = null;
     }

@@ -48,7 +48,7 @@ interface MockSocket {
 
 describe('EventsGateway connection auth + subscribe re-validation', () => {
   let gateway: EventsGateway;
-  let authService: { validateApiKey: jest.Mock };
+  let authService: { validateApiKey: jest.Mock; authenticateCredential: jest.Mock };
 
   const makeSocket = (auth: { apiKey?: string } = {}): MockSocket => ({
     id: 'sock-1',
@@ -66,7 +66,14 @@ describe('EventsGateway connection auth + subscribe re-validation', () => {
   let auditService: { logWarn: jest.Mock };
 
   beforeEach(() => {
-    authService = { validateApiKey: jest.fn() };
+    authService = {
+      validateApiKey: jest.fn(),
+      authenticateCredential: jest.fn(),
+    };
+    // Default: authenticateCredential delegates to validateApiKey behavior in tests
+    authService.authenticateCredential.mockImplementation((...args: unknown[]) =>
+      authService.validateApiKey(...args),
+    );
     auditService = { logWarn: jest.fn().mockResolvedValue(null) };
     gateway = new EventsGateway(authService as unknown as AuthService, auditService as unknown as AuditService);
   });

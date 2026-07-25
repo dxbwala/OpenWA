@@ -9,6 +9,10 @@ export enum AuditAction {
   API_KEY_DELETED = 'api_key_deleted',
   API_KEY_AUTH_FAILED = 'api_key_auth_failed',
 
+  // Dashboard user login
+  USER_LOGIN = 'user_login',
+  USER_LOGIN_FAILED = 'user_login_failed',
+
   // Session events
   SESSION_CREATED = 'session_created',
   SESSION_STARTED = 'session_started',

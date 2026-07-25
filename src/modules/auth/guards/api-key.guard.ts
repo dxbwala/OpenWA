@@ -53,7 +53,7 @@ export class ApiKeyGuard implements CanActivate {
     const apiKeyHeader = this.extractApiKey(request);
 
     if (!apiKeyHeader) {
-      throw new UnauthorizedException('API key is required');
+      throw new UnauthorizedException('Authentication required');
     }
 
     const requiredRole = this.reflector.getAllAndOverride<ApiKeyRole>(REQUIRED_ROLE_KEY, [
@@ -73,8 +73,8 @@ export class ApiKeyGuard implements CanActivate {
       string | undefined;
     const clientIp = this.getClientIp(request);
 
-    // Validate API key
-    const apiKey = await this.authService.validateApiKey(apiKeyHeader, clientIp, sessionId);
+    // Validate API key OR dashboard JWT session
+    const apiKey = await this.authService.authenticateCredential(apiKeyHeader, clientIp, sessionId);
 
     if (requiredRole && !this.authService.hasPermission(apiKey, requiredRole)) {
       throw new ForbiddenException(`Insufficient permissions. Required: ${requiredRole}`);

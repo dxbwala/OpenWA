@@ -7,7 +7,7 @@ import { Layout } from './components/Layout';
 import { ToastProvider } from './components/Toast';
 import { RoleProvider, useRole, type UserRole } from './hooks/useRole';
 import { ErrorBoundary } from './components/ErrorBoundary';
-import { API_BASE_URL } from './services/api';
+import { API_BASE_URL, authHeadersForCredential } from './services/api';
 import './App.css';
 
 const Login = lazy(() => import('./pages/Login').then(m => ({ default: m.Login })));
@@ -39,15 +39,21 @@ function AppContent() {
   const [, setApiKey] = useState(savedKey || '');
   const { setRole, role } = useRole();
 
-  const handleLogin = async (key: string) => {
-    setApiKey(key);
-    sessionStorage.setItem('openwa_api_key', key);
+  const handleLogin = async (token: string, knownRole?: string) => {
+    setApiKey(token);
+    sessionStorage.setItem('openwa_api_key', token);
+
+    if (knownRole) {
+      setRole(knownRole as UserRole);
+      setIsAuthenticated(true);
+      return;
+    }
 
     // Fetch the role from API
     try {
       const response = await fetch(`${API_BASE_URL}/auth/validate`, {
         method: 'POST',
-        headers: { 'X-API-Key': key },
+        headers: authHeadersForCredential(token),
       });
       if (response.ok) {
         const data = await response.json();
@@ -74,11 +80,19 @@ function AppContent() {
 
     fetch(`${API_BASE_URL}/auth/validate`, {
       method: 'POST',
-      headers: { 'X-API-Key': savedKey },
+      headers: authHeadersForCredential(savedKey),
     })
-      .then(res => res.json())
+      .then(res => {
+        if (res.status === 401) {
+          sessionStorage.removeItem('openwa_api_key');
+          setIsAuthenticated(false);
+          setRole(null);
+          return null;
+        }
+        return res.json();
+      })
       .then(data => {
-        if (data.valid && data.role) {
+        if (data?.valid && data.role) {
           setRole(data.role as UserRole);
         }
       })
