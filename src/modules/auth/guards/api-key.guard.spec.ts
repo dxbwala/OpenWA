@@ -68,7 +68,7 @@ describe('ApiKeyGuard', () => {
 
   beforeEach(() => {
     authService = {
-      validateApiKey: jest.fn(),
+      authenticateCredential: jest.fn(),
       hasPermission: jest.fn(),
     };
 
@@ -90,7 +90,7 @@ describe('ApiKeyGuard', () => {
     const result = await guard.canActivate(context);
 
     expect(result).toBe(true);
-    expect(authService.validateApiKey).not.toHaveBeenCalled();
+    expect(authService.authenticateCredential).not.toHaveBeenCalled();
   });
 
   it('should reject requests without X-API-Key header', async () => {
@@ -108,32 +108,32 @@ describe('ApiKeyGuard', () => {
       .mockReturnValueOnce(undefined); // no required role
 
     const apiKey = createMockApiKey();
-    (authService.validateApiKey as jest.Mock).mockResolvedValue(apiKey);
+    (authService.authenticateCredential as jest.Mock).mockResolvedValue(apiKey);
 
     const context = createMockContext({ 'x-api-key': 'my-key' });
     const result = await guard.canActivate(context);
 
     expect(result).toBe(true);
-    expect(authService.validateApiKey).toHaveBeenCalledWith('my-key', '127.0.0.1', undefined);
+    expect(authService.authenticateCredential).toHaveBeenCalledWith('my-key', '127.0.0.1', undefined);
   });
 
   it('should accept Authorization Bearer header', async () => {
     reflector.getAllAndOverride.mockReturnValueOnce(false).mockReturnValueOnce(undefined);
 
     const apiKey = createMockApiKey();
-    (authService.validateApiKey as jest.Mock).mockResolvedValue(apiKey);
+    (authService.authenticateCredential as jest.Mock).mockResolvedValue(apiKey);
 
     const context = createMockContext({ authorization: 'Bearer my-bearer-key' });
     const result = await guard.canActivate(context);
 
     expect(result).toBe(true);
-    expect(authService.validateApiKey).toHaveBeenCalledWith('my-bearer-key', '127.0.0.1', undefined);
+    expect(authService.authenticateCredential).toHaveBeenCalledWith('my-bearer-key', '127.0.0.1', undefined);
   });
 
   it('should reject when API key validation fails', async () => {
     reflector.getAllAndOverride.mockReturnValueOnce(false);
 
-    (authService.validateApiKey as jest.Mock).mockRejectedValue(new UnauthorizedException('Invalid API key'));
+    (authService.authenticateCredential as jest.Mock).mockRejectedValue(new UnauthorizedException('Invalid API key'));
 
     const context = createMockContext({ 'x-api-key': 'bad-key' });
 
@@ -142,7 +142,7 @@ describe('ApiKeyGuard', () => {
 
   it('records an API_KEY_AUTH_FAILED audit event when a key is rejected (with ip + reason)', async () => {
     reflector.getAllAndOverride.mockReturnValueOnce(false); // not public
-    (authService.validateApiKey as jest.Mock).mockRejectedValue(new UnauthorizedException('Invalid API key'));
+    (authService.authenticateCredential as jest.Mock).mockRejectedValue(new UnauthorizedException('Invalid API key'));
 
     const context = createMockContext({ 'x-api-key': 'bad-key' }, {}, '203.0.113.9');
     await expect(guard.canActivate(context)).rejects.toThrow('Invalid API key');
@@ -166,7 +166,7 @@ describe('ApiKeyGuard', () => {
 
   it('does not record an audit event on a successful authorization', async () => {
     reflector.getAllAndOverride.mockReturnValueOnce(false).mockReturnValueOnce(undefined);
-    (authService.validateApiKey as jest.Mock).mockResolvedValue(createMockApiKey());
+    (authService.authenticateCredential as jest.Mock).mockResolvedValue(createMockApiKey());
 
     const context = createMockContext({ 'x-api-key': 'good-key' });
     await guard.canActivate(context);
@@ -181,7 +181,7 @@ describe('ApiKeyGuard', () => {
       .mockReturnValueOnce(ApiKeyRole.ADMIN); // required role = ADMIN
 
     const apiKey = createMockApiKey({ role: ApiKeyRole.VIEWER });
-    (authService.validateApiKey as jest.Mock).mockResolvedValue(apiKey);
+    (authService.authenticateCredential as jest.Mock).mockResolvedValue(apiKey);
     (authService.hasPermission as jest.Mock).mockReturnValue(false);
 
     const context = createMockContext({ 'x-api-key': 'viewer-key' });
@@ -189,16 +189,16 @@ describe('ApiKeyGuard', () => {
     await expect(guard.canActivate(context)).rejects.toThrow(ForbiddenException);
   });
 
-  it('should pass session ID from route params to validateApiKey', async () => {
+  it('should pass session ID from route params to authenticateCredential', async () => {
     reflector.getAllAndOverride.mockReturnValueOnce(false).mockReturnValueOnce(undefined);
 
     const apiKey = createMockApiKey();
-    (authService.validateApiKey as jest.Mock).mockResolvedValue(apiKey);
+    (authService.authenticateCredential as jest.Mock).mockResolvedValue(apiKey);
 
     const context = createMockContext({ 'x-api-key': 'key' }, { sessionId: 'sess-123' });
     await guard.canActivate(context);
 
-    expect(authService.validateApiKey).toHaveBeenCalledWith('key', '127.0.0.1', 'sess-123');
+    expect(authService.authenticateCredential).toHaveBeenCalledWith('key', '127.0.0.1', 'sess-123');
   });
 
   it('does not treat a non-session route :id as a session id (no @SessionScoped)', async () => {
@@ -208,13 +208,13 @@ describe('ApiKeyGuard', () => {
       .mockReturnValueOnce(undefined); // controller is NOT @SessionScoped
 
     const apiKey = createMockApiKey();
-    (authService.validateApiKey as jest.Mock).mockResolvedValue(apiKey);
+    (authService.authenticateCredential as jest.Mock).mockResolvedValue(apiKey);
 
     // e.g. GET /plugins/:id or /auth/api-keys/:id — :id is a plugin/key id, not a session.
     const context = createMockContext({ 'x-api-key': 'key' }, { id: 'plugin-x' });
     await guard.canActivate(context);
 
-    expect(authService.validateApiKey).toHaveBeenCalledWith('key', '127.0.0.1', undefined);
+    expect(authService.authenticateCredential).toHaveBeenCalledWith('key', '127.0.0.1', undefined);
   });
 
   it('treats :id as the session id on a @SessionScoped controller (session scoping preserved)', async () => {
@@ -224,20 +224,20 @@ describe('ApiKeyGuard', () => {
       .mockReturnValueOnce(true); // controller IS @SessionScoped (SessionController)
 
     const apiKey = createMockApiKey();
-    (authService.validateApiKey as jest.Mock).mockResolvedValue(apiKey);
+    (authService.authenticateCredential as jest.Mock).mockResolvedValue(apiKey);
 
     // GET /sessions/:id/... — :id IS the session, so allowedSessions must still be enforced.
     const context = createMockContext({ 'x-api-key': 'key' }, { id: 'sess-B' });
     await guard.canActivate(context);
 
-    expect(authService.validateApiKey).toHaveBeenCalledWith('key', '127.0.0.1', 'sess-B');
+    expect(authService.authenticateCredential).toHaveBeenCalledWith('key', '127.0.0.1', 'sess-B');
   });
 
   it('ignores X-Forwarded-For by default (no trusted proxies) to prevent IP spoofing', async () => {
     reflector.getAllAndOverride.mockReturnValueOnce(false).mockReturnValueOnce(undefined);
 
     const apiKey = createMockApiKey();
-    (authService.validateApiKey as jest.Mock).mockResolvedValue(apiKey);
+    (authService.authenticateCredential as jest.Mock).mockResolvedValue(apiKey);
 
     // Attacker forges X-Forwarded-For; the direct socket IP must win.
     const context = createMockContext({
@@ -246,7 +246,7 @@ describe('ApiKeyGuard', () => {
     });
     await guard.canActivate(context);
 
-    expect(authService.validateApiKey).toHaveBeenCalledWith('key', '127.0.0.1', undefined);
+    expect(authService.authenticateCredential).toHaveBeenCalledWith('key', '127.0.0.1', undefined);
   });
 
   it('uses the rightmost untrusted hop when the request comes from a trusted proxy', async () => {
@@ -254,7 +254,7 @@ describe('ApiKeyGuard', () => {
     reflector.getAllAndOverride.mockReturnValueOnce(false).mockReturnValueOnce(undefined);
 
     const apiKey = createMockApiKey();
-    (authService.validateApiKey as jest.Mock).mockResolvedValue(apiKey);
+    (authService.authenticateCredential as jest.Mock).mockResolvedValue(apiKey);
 
     // Direct peer 10.0.0.1 is a trusted proxy; XFF = [real client, inner proxy].
     const context = createMockContext(
@@ -264,7 +264,7 @@ describe('ApiKeyGuard', () => {
     );
     await guard.canActivate(context);
 
-    expect(authService.validateApiKey).toHaveBeenCalledWith('key', '203.0.113.50', undefined);
+    expect(authService.authenticateCredential).toHaveBeenCalledWith('key', '203.0.113.50', undefined);
   });
 
   it('ignores X-Forwarded-For when the direct peer is not a trusted proxy', async () => {
@@ -272,13 +272,13 @@ describe('ApiKeyGuard', () => {
     reflector.getAllAndOverride.mockReturnValueOnce(false).mockReturnValueOnce(undefined);
 
     const apiKey = createMockApiKey();
-    (authService.validateApiKey as jest.Mock).mockResolvedValue(apiKey);
+    (authService.authenticateCredential as jest.Mock).mockResolvedValue(apiKey);
 
     // Attacker connects directly (203.0.113.99) and forges a trusted-looking XFF.
     const context = createMockContext({ 'x-api-key': 'key', 'x-forwarded-for': '10.0.0.5' }, {}, '203.0.113.99');
     await guard.canActivate(context);
 
-    expect(authService.validateApiKey).toHaveBeenCalledWith('key', '203.0.113.99', undefined);
+    expect(authService.authenticateCredential).toHaveBeenCalledWith('key', '203.0.113.99', undefined);
   });
 
   it('normalizes an IPv4-mapped IPv6 proxy address (e.g. ::ffff:10.0.0.1)', async () => {
@@ -286,11 +286,11 @@ describe('ApiKeyGuard', () => {
     reflector.getAllAndOverride.mockReturnValueOnce(false).mockReturnValueOnce(undefined);
 
     const apiKey = createMockApiKey();
-    (authService.validateApiKey as jest.Mock).mockResolvedValue(apiKey);
+    (authService.authenticateCredential as jest.Mock).mockResolvedValue(apiKey);
 
     const context = createMockContext({ 'x-api-key': 'key', 'x-forwarded-for': '203.0.113.50' }, {}, '::ffff:10.0.0.1');
     await guard.canActivate(context);
 
-    expect(authService.validateApiKey).toHaveBeenCalledWith('key', '203.0.113.50', undefined);
+    expect(authService.authenticateCredential).toHaveBeenCalledWith('key', '203.0.113.50', undefined);
   });
 });

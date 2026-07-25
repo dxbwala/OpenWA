@@ -1,6 +1,7 @@
 import { ConflictException, Injectable, NotFoundException, UnauthorizedException, OnModuleInit } from '@nestjs/common';
 import { ModuleRef } from '@nestjs/core';
 import { InjectRepository } from '@nestjs/typeorm';
+import { JwtService } from '@nestjs/jwt';
 import { IsNull, MoreThan, Not, Repository } from 'typeorm';
 import { randomBytes } from 'crypto';
 import { existsSync, readFileSync } from 'fs';
@@ -8,12 +9,16 @@ import { join } from 'path';
 import { writeSecretFile } from '../../common/utils/secret-file';
 import { ipMatches } from '../../common/utils/ip';
 import { hashApiKey } from './api-key-hash';
+import { hashPassword, verifyPassword } from './password-hash';
 import { ApiKey, ApiKeyRole } from './entities/api-key.entity';
+import { User } from './entities/user.entity';
 import { CreateApiKeyDto, UpdateApiKeyDto } from './dto';
 import { createLogger } from '../../common/services/logger.service';
 import { EventsGateway, type ApiKeyEvictionReason } from '../events/events.gateway';
 
 const API_KEY_FILE = join(process.cwd(), 'data', '.api-key');
+/** Default JWT lifetime for dashboard password sessions (12 hours). */
+export const USER_TOKEN_TTL_SECONDS = 12 * 60 * 60;
 
 /**
  * Resolves the API key to seed on first boot (when no keys exist yet).
@@ -45,6 +50,34 @@ export function bannerKeyLine(displayKey: string, isNewKey: boolean): string {
   return `${displayKey.slice(0, 8)}… (full key in data/.api-key or the dashboard)`;
 }
 
+/** Compact JWT shape: three base64url segments separated by dots. */
+export function looksLikeJwt(credential: string): boolean {
+  const parts = credential.split('.');
+  return parts.length === 3 && parts.every(p => p.length > 0);
+}
+
+/**
+ * Project a dashboard user onto the ApiKey shape so existing controllers,
+ * role checks, and audit stamping keep working without a dual-principal rewrite.
+ */
+export function userAsApiKey(user: User): ApiKey {
+  return {
+    id: user.id,
+    name: `user:${user.username}`,
+    keyHash: '',
+    keyPrefix: 'user',
+    role: user.role,
+    allowedIps: null,
+    allowedSessions: null,
+    isActive: user.isActive,
+    expiresAt: null,
+    lastUsedAt: user.lastLoginAt,
+    usageCount: 0,
+    createdAt: user.createdAt,
+    updatedAt: user.updatedAt,
+  } as ApiKey;
+}
+
 @Injectable()
 export class AuthService implements OnModuleInit {
   private readonly logger = createLogger('AuthService');
@@ -57,6 +90,9 @@ export class AuthService implements OnModuleInit {
   constructor(
     @InjectRepository(ApiKey, 'main')
     private readonly apiKeyRepository: Repository<ApiKey>,
+    @InjectRepository(User, 'main')
+    private readonly userRepository: Repository<User>,
+    private readonly jwtService: JwtService,
     private readonly moduleRef: ModuleRef,
   ) {}
 
@@ -92,6 +128,8 @@ export class AuthService implements OnModuleInit {
       }
     }
 
+    const seededUser = await this.ensureBootstrapAdmin();
+
     // Always show the welcome banner on startup
     const apiBaseUrl = process.env.BASE_URL || `http://localhost:${process.env.PORT || 2785}`;
     // The dashboard is served by NestJS at the same origin as the API now, so default to it.
@@ -105,6 +143,15 @@ export class AuthService implements OnModuleInit {
     this.logger.log(`  📊 Dashboard: ${dashboardUrl}`);
     this.logger.log(`  📚 API Docs:  ${apiBaseUrl}/api/docs`);
     this.logger.log('');
+    if (seededUser) {
+      this.logger.log('  👤 Dashboard login (newly created):');
+      this.logger.log(`     username: ${seededUser.username}`);
+      this.logger.log(`     password: ${seededUser.password}`);
+      this.logger.log('');
+    } else {
+      this.logger.log('  👤 Dashboard login: username/password (or API key)');
+      this.logger.log('');
+    }
     if (isNewKey) {
       this.logger.log('  🔑 API Key (newly created):');
     } else {
@@ -114,6 +161,38 @@ export class AuthService implements OnModuleInit {
     this.logger.log('');
     this.logger.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
     this.logger.log('');
+  }
+
+  /**
+   * Create the first dashboard admin when no users exist yet.
+   * Credentials: ADMIN_USERNAME (default `admin`) + ADMIN_PASSWORD (required to seed;
+   * if unset, a random password is generated and printed once).
+   */
+  private async ensureBootstrapAdmin(): Promise<{ username: string; password: string } | null> {
+    const userCount = await this.userRepository.count();
+    if (userCount > 0) {
+      return null;
+    }
+
+    const username = (process.env.ADMIN_USERNAME || 'admin').trim().toLowerCase();
+    let password = process.env.ADMIN_PASSWORD?.trim() || '';
+    let generated = false;
+    if (!password) {
+      password = randomBytes(18).toString('base64url');
+      generated = true;
+    }
+
+    const user = this.userRepository.create({
+      username,
+      passwordHash: hashPassword(password),
+      role: ApiKeyRole.ADMIN,
+      isActive: true,
+      lastLoginAt: null,
+    });
+    await this.userRepository.save(user);
+
+    this.logger.log(`Seeded dashboard admin user "${username}"${generated ? ' (generated password)' : ''}`);
+    return { username, password };
   }
 
   private async seedApiKey(rawKey: string, name: string, role: ApiKeyRole): Promise<ApiKey> {
@@ -357,5 +436,63 @@ export class AuthService implements OnModuleInit {
     };
 
     return roleHierarchy[apiKey.role] >= roleHierarchy[requiredRole];
+  }
+
+  /**
+   * Authenticate either a dashboard JWT or a classic API key.
+   * Used by the REST guard and the WebSocket gateway.
+   */
+  async authenticateCredential(raw: string, clientIp?: string, sessionId?: string): Promise<ApiKey> {
+    if (looksLikeJwt(raw)) {
+      return this.validateUserToken(raw);
+    }
+    return this.validateApiKey(raw, clientIp, sessionId);
+  }
+
+  async loginWithPassword(
+    username: string,
+    password: string,
+  ): Promise<{ accessToken: string; role: ApiKeyRole; username: string; expiresIn: number }> {
+    const normalized = username.trim().toLowerCase();
+    const user = await this.userRepository.findOne({ where: { username: normalized } });
+    if (!user || !user.isActive || !verifyPassword(password, user.passwordHash)) {
+      throw new UnauthorizedException('Invalid username or password');
+    }
+
+    user.lastLoginAt = new Date();
+    await this.userRepository.save(user);
+
+    const expiresIn = USER_TOKEN_TTL_SECONDS;
+    const accessToken = await this.jwtService.signAsync(
+      {
+        sub: user.id,
+        username: user.username,
+        role: user.role,
+        typ: 'user',
+      },
+      { expiresIn },
+    );
+
+    return { accessToken, role: user.role, username: user.username, expiresIn };
+  }
+
+  async validateUserToken(token: string): Promise<ApiKey> {
+    let payload: { sub?: string; typ?: string };
+    try {
+      payload = await this.jwtService.verifyAsync(token);
+    } catch {
+      throw new UnauthorizedException('Invalid or expired session');
+    }
+
+    if (payload.typ !== 'user' || !payload.sub) {
+      throw new UnauthorizedException('Invalid session token');
+    }
+
+    const user = await this.userRepository.findOne({ where: { id: payload.sub } });
+    if (!user || !user.isActive) {
+      throw new UnauthorizedException('User account is disabled or missing');
+    }
+
+    return userAsApiKey(user);
   }
 }

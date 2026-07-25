@@ -18,6 +18,20 @@ export const API_BASE_URL = `${API_ORIGIN}/api`;
 // insecure http:// URL pointing at a non-localhost host (API keys sent in cleartext).
 if (API_ORIGIN) warnIfInsecureHttpUrl(API_ORIGIN, 'VITE_API_URL');
 
+/** Compact JWT: three non-empty segments. API keys (owa_k1_…) never match. */
+export function looksLikeJwt(credential: string): boolean {
+  const parts = credential.split('.');
+  return parts.length === 3 && parts.every(p => p.length > 0);
+}
+
+/** Headers for a stored dashboard credential (JWT session or classic API key). */
+export function authHeadersForCredential(credential: string): Record<string, string> {
+  if (looksLikeJwt(credential)) {
+    return { Authorization: `Bearer ${credential}` };
+  }
+  return { 'X-API-Key': credential };
+}
+
 // =============================================================================
 // Types
 // =============================================================================
@@ -533,14 +547,14 @@ export interface SearchResults {
 async function request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
   const url = `${API_BASE_URL}${endpoint}`;
 
-  // Get API key from sessionStorage for authentication
+  // Get API key / JWT from sessionStorage for authentication
   const apiKey = sessionStorage.getItem('openwa_api_key');
 
   // For FormData (file uploads) let the browser set multipart/form-data + boundary itself.
   const isFormData = options.body instanceof FormData;
   const headers: HeadersInit = {
     ...(isFormData ? {} : { 'Content-Type': 'application/json' }),
-    ...(apiKey ? { 'X-API-Key': apiKey } : {}),
+    ...(apiKey ? authHeadersForCredential(apiKey) : {}),
     ...options.headers,
   };
 
@@ -581,7 +595,7 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
 async function requestText(endpoint: string): Promise<string> {
   const apiKey = sessionStorage.getItem('openwa_api_key');
   const response = await fetch(`${API_BASE_URL}${endpoint}`, {
-    headers: { ...(apiKey ? { 'X-API-Key': apiKey } : {}) },
+    headers: { ...(apiKey ? authHeadersForCredential(apiKey) : {}) },
   });
 
   if (response.status === 401) {
@@ -604,11 +618,11 @@ async function requestText(endpoint: string): Promise<string> {
 async function requestBlob(endpoint: string): Promise<Blob> {
   const url = `${API_BASE_URL}${endpoint}`;
 
-  // Get API key from sessionStorage for authentication
+  // Get API key / JWT from sessionStorage for authentication
   const apiKey = sessionStorage.getItem('openwa_api_key');
 
   const headers: HeadersInit = {
-    ...(apiKey ? { 'X-API-Key': apiKey } : {}),
+    ...(apiKey ? authHeadersForCredential(apiKey) : {}),
   };
 
   const response = await fetch(url, { headers });

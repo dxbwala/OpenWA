@@ -1,6 +1,7 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
 import { io, Socket } from 'socket.io-client';
 import { warnIfInsecureHttpUrl } from '../utils/urlSecurity';
+import { authHeadersForCredential, looksLikeJwt } from '../services/api';
 
 interface SessionStatusEvent {
   sessionId: string;
@@ -122,14 +123,14 @@ export function useWebSocket(events: WebSocketEvents = {}) {
       reconnection: true,
       reconnectionAttempts: 5,
       reconnectionDelay: 1000,
-      // Send the key via `auth` (and a header for proxies). NOT via `query` — a key in the
+      // Send the credential via `auth` (and a header for proxies). NOT via `query` — a key in the
       // handshake URL leaks into access logs / Referer. The gateway reads auth first.
       auth: {
         apiKey,
       },
-      extraHeaders: {
-        'X-API-Key': apiKey,
-      },
+      extraHeaders: looksLikeJwt(apiKey)
+        ? { Authorization: `Bearer ${apiKey}` }
+        : authHeadersForCredential(apiKey),
     });
 
     socketRef.current.on('connect', () => {

@@ -15,6 +15,9 @@ coverage/
 # Data files (sessions, media, database)
 data/
 
+# TLS material — bind-mounted at runtime, never baked into an image layer
+certs/
+
 # IDE
 .idea/
 .vscode/
